@@ -21,6 +21,7 @@
 # Updates: Added infinite loop to re-run every 30 minutes as a keep alive to bypass pin prompt from Blink/Amazon
 #          03/22/2021 - Cleaned up the code and added more debug messages. Added try/catch on invalid pin.
 #          11/23/2025 - Migrated to OAuth2 authentication endpoint with automatic token refresh and 2FA support
+#          11/30/2025 - Updated to download thumbnails getting url from the homescreen endpoint
 #######################################################################################################################
 
 # Change saveDirectory directory if you want the Blink Files to be saved somewhere else, default is user Desktop
@@ -309,41 +310,62 @@ while (1)
 {
 	echo "`nStarting download cycle..."
 	
-	# Get list of networks (headers always fresh)
-	$uri = 'https://rest-'+ $script:region +".immedia-semi.com/api/v1/camera/usage"
-	$sync_units = Invoke-RestMethod -UseBasicParsing $uri -Method Get -Headers (Get-AuthHeaders)
-	
-	foreach($sync_unit in $sync_units.networks)
-	{
-		$network_id = $sync_unit.network_id
-		$networkName = $sync_unit.name
-		
-		foreach($camera in $sync_unit.cameras){
-			$cameraName = $camera.name
-			$cameraId = $camera.id
-			$uri = 'https://rest-'+ $script:region +".immedia-semi.com/network/$network_id/camera/$cameraId"
-			
-			# Get camera info with fresh headers
-			$camera = Invoke-RestMethod -UseBasicParsing $uri -Method Get -Headers (Get-AuthHeaders)
-			$cameraThumbnail = $camera.camera_status.thumbnail
+    # Get homescreen info - single endpoint with all camera and network data
+    $homescreenUri = "https://rest-$script:region.immedia-semi.com/api/v3/accounts/$script:accountID/homescreen"
+    $homescreen = Invoke-RestMethod -UseBasicParsing $homescreenUri -Method Get -Headers (Get-AuthHeaders)
+    
+    # Build network name lookup dictionary
+    $networkNames = @{}
+    foreach($network in $homescreen.networks) {
+        $networkNames[$network.id] = $network.name
+    }
+    
+    # Process each camera directly from homescreen
+    foreach($camera in $homescreen.cameras) {
+        $cameraId = $camera.id
+        $cameraName = $camera.name
+        $networkId = $camera.network_id
+        $thumbnailPath = $camera.thumbnail
+        
+        # Get network name from lookup
+        $networkName = $networkNames[$networkId]
+        if (-not $networkName) {
+            $networkName = "Unknown_Network_$networkId"
+        }
+        
+        # Create Blink Directory to store videos if it doesn't exist
+        $path = "$saveDirectory\Blink\$networkName\$cameraName"
+        if (-not (Test-Path $path)){
+            $folder = New-Item  -ItemType Directory -Path $path
+        }
 
-			# Create Blink Directory to store videos if it doesn't exist
-			$path = "$saveDirectory\Blink\$networkName\$cameraName"
-			if (-not (Test-Path $path)){
-				$folder = New-Item  -ItemType Directory -Path $path
-			}
-
-			# Download camera thumbnail
-			$thumbURL = 'https://rest-'+ $script:region +'.immedia-semi.com' + $cameraThumbnail + ".jpg"
-			$thumbPath = "$path\" + "thumbnail_" + $cameraThumbnail.Split("/")[-1] + ".jpg"
-			
-			# Skip if already downloaded
-			if (-not (Test-Path $thumbPath)){
-				echo "Downloading thumbnail for $cameraName camera in $networkName."
-				Invoke-RestMethod -UseBasicParsing $thumbURL -Method Get -Headers (Get-AuthHeaders) -OutFile $thumbPath
-			}
-		}
-	}
+        # Download camera thumbnail if available
+        if ($thumbnailPath) {
+            # Build full URL
+            $thumbURL = "https://rest-$script:region.immedia-semi.com$thumbnailPath"
+            
+            # Extract timestamp from URL for filename
+            if ($thumbnailPath -match 'ts=(\d+)') {
+                $timestamp = $Matches[1]
+                $thumbFilename = "thumbnail_$timestamp.jpg"
+            } else {
+                $thumbFilename = "thumbnail_latest.jpg"
+            }
+            
+            $thumbPath = "$path\$thumbFilename"
+            
+            # Skip if already downloaded
+            if (-not (Test-Path $thumbPath)){
+                try {
+                    Invoke-RestMethod -UseBasicParsing $thumbURL -Method Get -Headers (Get-AuthHeaders) -OutFile $thumbPath -ErrorAction Stop
+                    echo "Downloaded thumbnail for $cameraName camera in $networkName."
+                }
+                catch {
+                    # Silently skip thumbnails that no longer exist or are inaccessible
+                }
+            }
+        }
+    }
 
 	$pageNum = 1
 	$videoCount = 0
