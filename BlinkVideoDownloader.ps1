@@ -24,6 +24,7 @@
 #          11/23/2025 - Migrated to OAuth2 authentication endpoint with automatic token refresh and 2FA support
 #          11/30/2025 - Updated to download thumbnails getting url from the homescreen endpoint
 #          12/07/2025 - Updated to support PKCE
+#          06/27/2026 - Support to return code 202 for 2FA-signin
 #######################################################################################################################
 
 # Change saveDirectory directory if you want the Blink Files to be saved somewhere else, default is user Desktop
@@ -192,7 +193,7 @@ function Submit-LoginCredentials {
         $response = Invoke-WebRequest -Uri $url -Method Post -Headers $headers -Body $bodyString -WebSession $script:oauthSession -MaximumRedirection 0 -ErrorAction SilentlyContinue
         
         # Check status code
-        if ($response.StatusCode -eq 412) {
+        if ($response.StatusCode -in @(202, 412)) {
             return "2FA_REQUIRED"
         } elseif ($response.StatusCode -in @(301, 302, 303, 307, 308)) {
             return "SUCCESS"
@@ -203,7 +204,7 @@ function Submit-LoginCredentials {
         # PowerShell treats 3xx as errors if MaximumRedirection=0
         if ($_.Exception.Response.StatusCode.Value__ -in @(301, 302, 303, 307, 308)) {
             return "SUCCESS"
-        } elseif ($_.Exception.Response.StatusCode.Value__ -eq 412) {
+        } elseif ($_.Exception.Response.StatusCode.Value__ -in @(202, 412)) {
             return "2FA_REQUIRED"
         }
         
